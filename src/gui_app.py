@@ -1,31 +1,41 @@
 import json
 import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 import gradio as gr
 
-from prepare_dataset import collect_examples, write_jsonl
 from generate_lyrics import build_prompt, load_train_texts, novelty_score
+from prepare_dataset import collect_examples, write_jsonl
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+
+
+def _resolve_path(path_value: str) -> Path:
+    path = Path(path_value)
+    return path if path.is_absolute() else ROOT_DIR / path
 
 
 def run_prepare(input_dir: str, output_train: str, output_valid: str, valid_ratio: float, seed: int):
     import random
 
-    in_dir = Path(input_dir)
-    train_path = Path(output_train)
-    valid_path = Path(output_valid)
+    in_dir = _resolve_path(input_dir)
+    train_path = _resolve_path(output_train)
+    valid_path = _resolve_path(output_valid)
 
     if not in_dir.exists():
         return f"❌ Папка не найдена: {in_dir}"
+    if not (0.01 <= float(valid_ratio) <= 0.5):
+        return "❌ valid_ratio должен быть в диапазоне [0.01, 0.5]"
 
     examples = collect_examples(in_dir)
     if len(examples) < 10:
         return "❌ Слишком мало данных. Добавь минимум 10+ песен в data/raw/<artist>/*.txt"
 
-    random.seed(seed)
+    random.seed(int(seed))
     random.shuffle(examples)
-    split = int(len(examples) * (1 - valid_ratio))
+    split = int(len(examples) * (1 - float(valid_ratio)))
     train_items = examples[:split]
     valid_items = examples[split:]
 
@@ -39,36 +49,46 @@ def run_prepare(input_dir: str, output_train: str, output_valid: str, valid_rati
     )
 
 
-def run_training(base_model: str, train_file: str, valid_file: str, output_dir: str, max_length: int, batch_size: int, epochs: int, lr: float):
+def run_training(base_model: str, train_file: str, valid_file: str, output_dir: str, max_length: int, batch_size: int, epochs: int, lr: float, use_4bit: bool):
+    train_path = _resolve_path(train_file)
+    valid_path = _resolve_path(valid_file)
+    output_path = _resolve_path(output_dir)
+
+    if not train_path.exists() or not valid_path.exists():
+        return "❌ Не найдены train/valid файлы. Сначала собери датасет на 1-й вкладке."
+
     cmd = [
         sys.executable,
-        "src/train_lora.py",
+        str(ROOT_DIR / "src" / "train_lora.py"),
         "--base_model", base_model,
-        "--train_file", train_file,
-        "--valid_file", valid_file,
-        "--output_dir", output_dir,
+        "--train_file", str(train_path),
+        "--valid_file", str(valid_path),
+        "--output_dir", str(output_path),
         "--max_length", str(max_length),
         "--batch_size", str(batch_size),
         "--epochs", str(epochs),
         "--lr", str(lr),
     ]
+    if use_4bit:
+        cmd.append("--use_4bit")
+
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, cwd=str(ROOT_DIR))
     except Exception as exc:
         return f"❌ Ошибка запуска обучения: {exc}"
 
     if proc.returncode != 0:
         return f"❌ Обучение завершилось с ошибкой\n\nSTDOUT:\n{proc.stdout}\n\nSTDERR:\n{proc.stderr}"
 
+    _load_model.cache_clear()
     return f"✅ Обучение завершено\n\n{proc.stdout[-4000:]}"
 
 
-def run_generate(base_model: str, adapter_dir: str, train_file: str, topic: str, mood: str, rhyme: str, verses: int, max_new_tokens: int, temperature: float, top_p: float, repetition_penalty: float):
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    from peft import PeftModel
+@lru_cache(maxsize=2)
+def _load_model(base_model: str, adapter_dir: str):
     import torch
-
-    prompt = build_prompt(topic, mood, rhyme, verses)
+    from peft import PeftModel
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(base_model)
     base = AutoModelForCausalLM.from_pretrained(
@@ -78,6 +98,26 @@ def run_generate(base_model: str, adapter_dir: str, train_file: str, topic: str,
     )
     model = PeftModel.from_pretrained(base, adapter_dir)
     model.eval()
+    return tokenizer, model
+
+
+def run_generate(base_model: str, adapter_dir: str, train_file: str, topic: str, mood: str, rhyme: str, verses: int, max_new_tokens: int, temperature: float, top_p: float, repetition_penalty: float):
+    import torch
+
+    adapter_path = _resolve_path(adapter_dir)
+    train_path = _resolve_path(train_file)
+
+    if not adapter_path.exists():
+        return "", "❌ Папка адаптера не найдена. Сначала запусти обучение.",
+    if not train_path.exists():
+        return "", "❌ Train file не найден для novelty_score.",
+
+    prompt = build_prompt(topic, mood, rhyme, verses)
+
+    try:
+        tokenizer, model = _load_model(base_model, str(adapter_path))
+    except Exception as exc:
+        return "", f"❌ Ошибка загрузки модели: {exc}"
 
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
     with torch.no_grad():
@@ -92,7 +132,7 @@ def run_generate(base_model: str, adapter_dir: str, train_file: str, topic: str,
         )
 
     text = tokenizer.decode(output[0], skip_special_tokens=True)
-    score = novelty_score(text, load_train_texts(Path(train_file)), n=5)
+    score = novelty_score(text, load_train_texts(train_path), n=5)
 
     metrics = {
         "novelty_score": round(score, 3),
@@ -107,14 +147,14 @@ def build_app():
     with gr.Blocks(title="Lyrics AI Studio") as demo:
         gr.Markdown(
             "# 🎵 Lyrics AI Studio\n"
-            "Простой GUI для подготовки датасета, обучения LoRA и генерации текста песен."
+            "Пошаговый GUI для подготовки датасета, обучения LoRA и генерации текста песен."
         )
 
         with gr.Tab("1) Подготовка датасета"):
             input_dir = gr.Textbox(value="data/raw", label="Папка с песнями (data/raw/<artist>/*.txt)")
             output_train = gr.Textbox(value="data/processed/train.jsonl", label="Куда сохранить train")
             output_valid = gr.Textbox(value="data/processed/valid.jsonl", label="Куда сохранить valid")
-            valid_ratio = gr.Slider(0.05, 0.3, value=0.1, step=0.05, label="Доля valid")
+            valid_ratio = gr.Slider(0.01, 0.5, value=0.1, step=0.01, label="Доля valid")
             seed = gr.Number(value=42, precision=0, label="Seed")
             prepare_btn = gr.Button("Собрать датасет")
             prepare_out = gr.Textbox(label="Лог", lines=8)
@@ -129,9 +169,14 @@ def build_app():
             batch_size = gr.Slider(1, 8, value=2, step=1, label="Batch size")
             epochs = gr.Slider(1, 10, value=2, step=1, label="Epochs")
             lr = gr.Number(value=2e-4, label="Learning rate")
+            use_4bit = gr.Checkbox(value=True, label="Использовать 4-bit (только CUDA)")
             train_btn = gr.Button("Запустить обучение")
             train_out = gr.Textbox(label="Лог обучения", lines=14)
-            train_btn.click(run_training, [base_model, train_file, valid_file, output_dir, max_length, batch_size, epochs, lr], train_out)
+            train_btn.click(
+                run_training,
+                [base_model, train_file, valid_file, output_dir, max_length, batch_size, epochs, lr, use_4bit],
+                train_out,
+            )
 
         with gr.Tab("3) Генерация"):
             g_base_model = gr.Textbox(value="Qwen/Qwen2.5-1.5B-Instruct", label="Base model")

@@ -4,7 +4,6 @@ from collections import Counter
 from pathlib import Path
 
 
-
 def ngrams(tokens, n=5):
     return [tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1)]
 
@@ -61,6 +60,9 @@ def main():
     parser.add_argument("--rhyme", type=str, default="ABAB")
     parser.add_argument("--verses", type=int, default=2)
     parser.add_argument("--max_new_tokens", type=int, default=256)
+    parser.add_argument("--temperature", type=float, default=0.9)
+    parser.add_argument("--top_p", type=float, default=0.95)
+    parser.add_argument("--repetition_penalty", type=float, default=1.15)
     args = parser.parse_args()
 
     import torch
@@ -83,9 +85,9 @@ def main():
         output = model.generate(
             **inputs,
             do_sample=True,
-            temperature=0.9,
-            top_p=0.95,
-            repetition_penalty=1.15,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            repetition_penalty=args.repetition_penalty,
             max_new_tokens=args.max_new_tokens,
             eos_token_id=tokenizer.eos_token_id,
         )

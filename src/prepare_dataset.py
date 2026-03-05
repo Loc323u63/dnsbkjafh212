@@ -10,7 +10,7 @@ def normalize_text(text: str) -> str:
     return "\n".join(lines)
 
 
-def build_prompt(artist: str, lyrics: str) -> str:
+def build_prompt(artist: str) -> str:
     return (
         "Ты помощник по написанию оригинальных текстов песен. "
         "Никогда не копируй дословно известные строки.\n"
@@ -34,7 +34,7 @@ def collect_examples(input_dir: Path):
                 {
                     "messages": [
                         {"role": "system", "content": "Ты пишешь только оригинальные тексты песен."},
-                        {"role": "user", "content": build_prompt(artist, lyrics)},
+                        {"role": "user", "content": build_prompt(artist)},
                         {"role": "assistant", "content": lyrics},
                     ]
                 }
@@ -57,6 +57,11 @@ def main():
     parser.add_argument("--valid_ratio", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
+
+    if not args.input_dir.exists():
+        raise FileNotFoundError(f"Папка не найдена: {args.input_dir}")
+    if not (0.01 <= args.valid_ratio <= 0.5):
+        raise ValueError("valid_ratio должен быть в диапазоне [0.01, 0.5]")
 
     examples = collect_examples(args.input_dir)
     if len(examples) < 10:
