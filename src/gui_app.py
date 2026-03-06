@@ -3,6 +3,7 @@ import subprocess
 import sys
 from functools import lru_cache
 from pathlib import Path
+from typing import Iterable
 
 import gradio as gr
 
@@ -11,27 +12,59 @@ from prepare_dataset import collect_examples, write_jsonl
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
+POPULAR_ARTISTS = [
+    "Скриптонит",
+    "Miyagi",
+    "Oxxxymiron",
+    "Noize MC",
+    "MORGENSHTERN",
+    "Eminem",
+    "The Weeknd",
+    "Drake",
+    "Kendrick Lamar",
+    "Travis Scott",
+]
+
+SOURCE_CHOICES = ["itunes", "youtube", "soundcloud", "vk"]
+
 
 def _resolve_path(path_value: str) -> Path:
     path = Path(path_value)
     return path if path.is_absolute() else ROOT_DIR / path
 
 
+def _join_values(values) -> str:
+    if values is None:
+        return ""
+    if isinstance(values, str):
+        return values
+    if isinstance(values, Iterable):
+        cleaned = [str(v).strip() for v in values if str(v).strip()]
+        return ",".join(cleaned)
+    return str(values)
 
 
-def run_fetch(artists: str, sources: str, output_dir: str, max_songs: int, sleep_s: float):
-    if not artists.strip():
-        return "❌ Укажи хотя бы одного исполнителя (через запятую)."
+def run_fetch(artists, sources, output_dir: str, max_songs: int, sleep_s: float):
+    artists_csv = _join_values(artists)
+    sources_csv = _join_values(sources)
+
+    if not artists_csv.strip():
+        return "❌ Укажи хотя бы одного исполнителя."
 
     out_path = _resolve_path(output_dir)
     cmd = [
         sys.executable,
         str(ROOT_DIR / "src" / "fetch_lyrics.py"),
-        "--artists", artists,
-        "--sources", sources,
-        "--output_dir", str(out_path),
-        "--max_songs", str(int(max_songs)),
-        "--sleep_s", str(float(sleep_s)),
+        "--artists",
+        artists_csv,
+        "--sources",
+        sources_csv,
+        "--output_dir",
+        str(out_path),
+        "--max_songs",
+        str(int(max_songs)),
+        "--sleep_s",
+        str(float(sleep_s)),
     ]
 
     try:
@@ -43,6 +76,8 @@ def run_fetch(artists: str, sources: str, output_dir: str, max_songs: int, sleep
         return f"❌ Загрузка завершилась с ошибкой\n\nSTDOUT:\n{proc.stdout}\n\nSTDERR:\n{proc.stderr}"
 
     return f"✅ Тексты загружены в {out_path}\n\n{proc.stdout[-4000:]}"
+
+
 def run_prepare(input_dir: str, output_train: str, output_valid: str, output_parsed: str, valid_ratio: float, seed: int):
     import random
 
@@ -84,19 +119,27 @@ def run_training(base_model: str, train_file: str, valid_file: str, output_dir: 
     output_path = _resolve_path(output_dir)
 
     if not train_path.exists() or not valid_path.exists():
-        return "❌ Не найдены train/valid файлы. Сначала собери датасет на 1-й вкладке."
+        return "❌ Не найдены train/valid файлы. Сначала собери датасет на вкладке 1."
 
     cmd = [
         sys.executable,
         str(ROOT_DIR / "src" / "train_lora.py"),
-        "--base_model", base_model,
-        "--train_file", str(train_path),
-        "--valid_file", str(valid_path),
-        "--output_dir", str(output_path),
-        "--max_length", str(max_length),
-        "--batch_size", str(batch_size),
-        "--epochs", str(epochs),
-        "--lr", str(lr),
+        "--base_model",
+        base_model,
+        "--train_file",
+        str(train_path),
+        "--valid_file",
+        str(valid_path),
+        "--output_dir",
+        str(output_path),
+        "--max_length",
+        str(max_length),
+        "--batch_size",
+        str(batch_size),
+        "--epochs",
+        str(epochs),
+        "--lr",
+        str(lr),
     ]
     if use_4bit:
         cmd.append("--use_4bit")
@@ -137,9 +180,9 @@ def run_generate(base_model: str, adapter_dir: str, train_file: str, topic: str,
     train_path = _resolve_path(train_file)
 
     if not adapter_path.exists():
-        return "", "❌ Папка адаптера не найдена. Сначала запусти обучение.",
+        return "", "❌ Папка адаптера не найдена. Сначала запусти обучение."
     if not train_path.exists():
-        return "", "❌ Train file не найден для novelty_score.",
+        return "", "❌ Train file не найден для novelty_score."
 
     prompt = build_prompt(topic, mood, rhyme, verses)
 
@@ -176,12 +219,26 @@ def build_app():
     with gr.Blocks(title="Lyrics AI Studio") as demo:
         gr.Markdown(
             "# 🎵 Lyrics AI Studio\n"
-            "Пошаговый GUI для подготовки датасета, обучения LoRA и генерации текста песен."
+            "Пошаговый GUI: скачать тексты → подготовить датасет → обучить LoRA → сгенерировать текст."
         )
 
         with gr.Tab("0) Скачать тексты из интернета"):
-            artists = gr.Textbox(value="Miyagi, Скриптонит", label="Исполнители через запятую")
-            sources = gr.Textbox(value="itunes,youtube,soundcloud,vk", label="Источники поиска (через запятую)")
+            artists = gr.Dropdown(
+                choices=POPULAR_ARTISTS,
+                value=["Miyagi", "Скриптонит"],
+                multiselect=True,
+                allow_custom_value=True,
+                filterable=True,
+                label="Исполнители (можно печатать и выбирать)",
+            )
+            sources = gr.Dropdown(
+                choices=SOURCE_CHOICES,
+                value=SOURCE_CHOICES,
+                multiselect=True,
+                allow_custom_value=False,
+                filterable=True,
+                label="Источники поиска",
+            )
             fetch_output_dir = gr.Textbox(value="data/raw", label="Куда сохранить txt")
             max_songs = gr.Slider(5, 50, value=20, step=1, label="Песен на исполнителя")
             sleep_s = gr.Slider(0.0, 2.0, value=0.25, step=0.05, label="Пауза между запросами")

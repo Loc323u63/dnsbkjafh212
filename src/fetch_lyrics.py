@@ -13,12 +13,17 @@ VK_SEARCH_URL = "https://m.vk.com/search"
 LYRICS_OVH_URL = "https://api.lyrics.ovh/v1/{artist}/{title}"
 LRCLIB_SEARCH_URL = "https://lrclib.net/api/search"
 
+DEFAULT_SOURCES = ["itunes", "youtube", "soundcloud", "vk"]
+
 REQUEST_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     )
 }
+
+SESSION = requests.Session()
+SESSION.headers.update(REQUEST_HEADERS)
 
 
 def sanitize_filename(name: str) -> str:
@@ -37,7 +42,7 @@ def normalize_title(title: str) -> str:
 
 def fetch_song_titles_itunes(artist: str, limit: int = 20, timeout: int = 20):
     params = {"term": artist, "entity": "song", "limit": max(1, min(200, limit * 3))}
-    resp = requests.get(ITUNES_SEARCH_URL, params=params, timeout=timeout, headers=REQUEST_HEADERS)
+    resp = SESSION.get(ITUNES_SEARCH_URL, params=params, timeout=timeout)
     resp.raise_for_status()
     data = resp.json()
 
@@ -52,16 +57,10 @@ def fetch_song_titles_itunes(artist: str, limit: int = 20, timeout: int = 20):
 
 def fetch_song_titles_youtube(artist: str, limit: int = 20, timeout: int = 20):
     query = f"{artist} official audio"
-    resp = requests.get(
-        YOUTUBE_SEARCH_URL,
-        params={"search_query": query},
-        timeout=timeout,
-        headers=REQUEST_HEADERS,
-    )
+    resp = SESSION.get(YOUTUBE_SEARCH_URL, params={"search_query": query}, timeout=timeout)
     resp.raise_for_status()
     html = resp.text
 
-    # Extract titles from JSON snippets in HTML
     matches = re.findall(r'"title":\{"runs":\[\{"text":"([^"]{2,120})"\}\]\}', html)
     titles = []
     for raw in matches:
@@ -77,16 +76,10 @@ def fetch_song_titles_youtube(artist: str, limit: int = 20, timeout: int = 20):
 
 
 def fetch_song_titles_soundcloud(artist: str, limit: int = 20, timeout: int = 20):
-    resp = requests.get(
-        SOUNDCLOUD_SEARCH_URL,
-        params={"q": artist},
-        timeout=timeout,
-        headers=REQUEST_HEADERS,
-    )
+    resp = SESSION.get(SOUNDCLOUD_SEARCH_URL, params={"q": artist}, timeout=timeout)
     resp.raise_for_status()
     html = resp.text
 
-    # SoundCloud page contains links like /artist/track-title
     matches = re.findall(r'href="/[^"/]+/([^"?#]+)"', html)
     titles = []
     for slug in matches:
@@ -99,18 +92,20 @@ def fetch_song_titles_soundcloud(artist: str, limit: int = 20, timeout: int = 20
 
 
 def fetch_song_titles_vk(artist: str, limit: int = 20, timeout: int = 20):
-    resp = requests.get(
-        VK_SEARCH_URL,
-        params={"c[q]": f"{artist}", "c[section]": "audio"},
-        timeout=timeout,
-        headers=REQUEST_HEADERS,
-    )
-    # VK may block/require login; return empty instead of failing whole run
+    resp = SESSION.get(VK_SEARCH_URL, params={"c[q]": f"{artist}", "c[section]": "audio"}, timeout=timeout)
     if resp.status_code >= 400:
         return []
     html = resp.text
     matches = re.findall(r'class="audio_item__title[^>]*>\s*([^<]{2,140})\s*<', html)
-    return [normalize_title(m) for m in matches if normalize_title(m)]
+
+    titles = []
+    for m in matches:
+        candidate = normalize_title(m)
+        if candidate:
+            titles.append(candidate)
+        if len(titles) >= limit * 3:
+            break
+    return titles
 
 
 def dedupe_titles(titles, artist: str, limit: int):
@@ -130,7 +125,7 @@ def dedupe_titles(titles, artist: str, limit: int):
 
 
 def fetch_song_titles(artist: str, limit: int = 20, timeout: int = 20, sources=None):
-    sources = sources or ["itunes", "youtube", "soundcloud", "vk"]
+    sources = sources or DEFAULT_SOURCES
     all_titles = []
 
     for source in sources:
@@ -150,12 +145,7 @@ def fetch_song_titles(artist: str, limit: int = 20, timeout: int = 20, sources=N
 
 
 def fetch_lyrics_text_lrclib(artist: str, title: str, timeout: int = 20):
-    resp = requests.get(
-        LRCLIB_SEARCH_URL,
-        params={"artist_name": artist, "track_name": title},
-        timeout=timeout,
-        headers=REQUEST_HEADERS,
-    )
+    resp = SESSION.get(LRCLIB_SEARCH_URL, params={"artist_name": artist, "track_name": title}, timeout=timeout)
     if resp.status_code == 404:
         return None
     resp.raise_for_status()
@@ -172,7 +162,7 @@ def fetch_lyrics_text_lrclib(artist: str, title: str, timeout: int = 20):
 def fetch_lyrics_text(artist: str, title: str, timeout: int = 20):
     url = LYRICS_OVH_URL.format(artist=quote(artist), title=quote(title))
     try:
-        resp = requests.get(url, timeout=timeout, headers=REQUEST_HEADERS)
+        resp = SESSION.get(url, timeout=timeout)
         if resp.status_code != 404:
             resp.raise_for_status()
             data = resp.json()
@@ -220,7 +210,7 @@ def parse_artists(raw: str):
 
 
 def parse_sources(raw: str):
-    allowed = {"itunes", "youtube", "soundcloud", "vk"}
+    allowed = set(DEFAULT_SOURCES)
     sources = [s.strip().lower() for s in raw.split(",") if s.strip()]
     sources = [s for s in sources if s in allowed]
     return sources or ["itunes"]
@@ -229,7 +219,7 @@ def parse_sources(raw: str):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--artists", type=str, required=True, help="Исполнители через запятую")
-    parser.add_argument("--sources", type=str, default="itunes,youtube,soundcloud,vk", help="Источники: itunes,youtube,soundcloud,vk")
+    parser.add_argument("--sources", type=str, default=",".join(DEFAULT_SOURCES), help="Источники: itunes,youtube,soundcloud,vk")
     parser.add_argument("--output_dir", type=Path, default=Path("data/raw"))
     parser.add_argument("--max_songs", type=int, default=20)
     parser.add_argument("--sleep_s", type=float, default=0.25)
