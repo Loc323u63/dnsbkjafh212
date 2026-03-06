@@ -51,6 +51,25 @@ python src/gui_app.py
 
 Открой: `http://localhost:7860`
 
+
+## 2.1) Если на Windows ошибка 502 / WinError 10054 при запуске Gradio
+
+Признак: приложение пишет `Running on local URL`, но потом падает на `startup-events` с 502/10054.
+
+Используй локальный host (по умолчанию уже так):
+
+```powershell
+python src/gui_app.py --host 127.0.0.1 --port 7860
+```
+
+Если нужен доступ с других устройств в сети:
+
+```powershell
+python src/gui_app.py --host 0.0.0.0 --port 7860
+```
+
+В коде уже добавлен обход прокси для `localhost/127.0.0.1` (`NO_PROXY`), что обычно решает эту проблему на Windows + корпоративных прокси.
+
 ## 3) Полный workflow в GUI
 
 ### Вкладка 0: Скачать тексты из интернета

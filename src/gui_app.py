@@ -1,4 +1,6 @@
+import argparse
 import json
+import os
 import subprocess
 import sys
 from functools import lru_cache
@@ -42,6 +44,17 @@ def _join_values(values) -> str:
         cleaned = [str(v).strip() for v in values if str(v).strip()]
         return ",".join(cleaned)
     return str(values)
+
+
+def _ensure_local_no_proxy():
+    local_hosts = ["localhost", "127.0.0.1", "::1"]
+    for key in ["NO_PROXY", "no_proxy"]:
+        current = os.environ.get(key, "")
+        parts = [p.strip() for p in current.split(",") if p.strip()]
+        for host in local_hosts:
+            if host not in parts:
+                parts.append(host)
+        os.environ[key] = ",".join(parts)
 
 
 def run_fetch(artists, sources, output_dir: str, max_songs: int, sleep_s: float):
@@ -300,6 +313,16 @@ def build_app():
     return demo
 
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="Host for Gradio. Use 0.0.0.0 for LAN.")
+    parser.add_argument("--port", type=int, default=7860)
+    parser.add_argument("--share", action="store_true")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    _ensure_local_no_proxy()
+    args = parse_args()
     app = build_app()
-    app.launch(server_name="0.0.0.0", server_port=7860)
+    app.launch(server_name=args.host, server_port=args.port, share=args.share)
