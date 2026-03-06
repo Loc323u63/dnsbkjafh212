@@ -1,31 +1,12 @@
-# Lyrics AI Studio: генерация текстов песен через GUI
+# Lyrics AI Studio: тексты из интернета → txt → парсинг → обучение → генерация
 
-Теперь проект умеет **сам парсить тексты исполнителей** и автоматически добавлять JSON-теги (`meta`) для каждой песни.
+Теперь можно полностью по шагам:
+1. В GUI ввести артистов.
+2. Автоматически скачать тексты из интернета в `data/raw/<artist>/*.txt`.
+3. Автоматически распарсить и разметить JSON-тегами.
+4. Дообучить LoRA и генерировать новые тексты.
 
-## Что делает парсер автоматически
-
-Для каждой песни формируется объект с:
-- `messages` (для обучения модели),
-- `meta.artist`,
-- `meta.title`,
-- `meta.source_file`,
-- `meta.style_tags` (авто-теги по содержанию).
-
-Пример одной строки в `parsed.jsonl`:
-
-```json
-{
-  "messages": [...],
-  "meta": {
-    "artist": "artist_1",
-    "title": "song_01",
-    "source_file": "artist_1/song_01.txt",
-    "style_tags": ["melancholic", "atmospheric"]
-  }
-}
-```
-
----
+> Важно: соблюдай авторские права и условия источников текстов.
 
 ## 1) Установка
 
@@ -36,46 +17,7 @@ pip install -U pip
 pip install -r requirements.txt
 ```
 
----
-
-## 2) Как подготовить файлы исполнителей
-
-Поддерживаются 2 формата.
-
-### Вариант A (простой): 1 файл = 1 песня
-
-```text
-data/raw/
-  artist_1/
-    song_01.txt
-    song_02.txt
-  artist_2/
-    song_01.txt
-```
-
-### Вариант B (автопарсинг нескольких песен из 1 файла)
-
-В одном `.txt` можно хранить несколько песен, разделяя их строкой `---` или `===`:
-
-```text
-Artist: Artist One
-Title: Night City
-<текст песни>
----
-Artist: Artist One
-Title: Rain
-<текст песни>
-```
-
-Поддерживаются заголовки:
-- `Artist:` / `Исполнитель:`
-- `Title:` / `Название:` / `Song:`
-
-Если заголовков нет — артист берется из имени папки, название из имени файла.
-
----
-
-## 3) Запуск GUI
+## 2) Запуск GUI
 
 ```bash
 python src/gui_app.py
@@ -83,55 +25,55 @@ python src/gui_app.py
 
 Открой: `http://localhost:7860`
 
----
+## 3) Полный workflow в GUI
 
-## 4) Что нажимать в GUI
+### Вкладка 0: Скачать тексты из интернета
+- `Исполнители через запятую`: например `Miyagi, Скриптонит`
+- `Куда сохранить txt`: `data/raw`
+- `Песен на исполнителя`: обычно 10–30
+- `Пауза между запросами`: 0.25
+
+Нажми **Скачать тексты**.
 
 ### Вкладка 1: Подготовка датасета
+- `data/raw` -> `data/processed/parsed.jsonl`, `train.jsonl`, `valid.jsonl`
+- Нажми **Собрать датасет**.
 
-Поля:
-- `Папка с песнями`: `data/raw`
-- `train`: `data/processed/train.jsonl`
-- `valid`: `data/processed/valid.jsonl`
-- `parsed`: `data/processed/parsed.jsonl` ← здесь будет полный распарсенный JSON с тегами
+`parsed.jsonl` содержит `meta`:
+- `artist`
+- `title`
+- `source_file`
+- `style_tags`
 
-Нажми **Собрать датасет**.
-
-### Вкладка 2: Обучение
-
-Оставь дефолтные значения, либо подстрой под свою GPU.
+### Вкладка 2: Обучение LoRA
+- Укажи модель и пути
+- Нажми **Запустить обучение**
 
 ### Вкладка 3: Генерация
+- Укажи тему/настроение/рифму
+- Нажми **Сгенерировать**
 
-Укажи тему/настроение/рифму и нажми **Сгенерировать**.
+## 4) Как работает автозагрузка
 
----
+Скрипт `src/fetch_lyrics.py`:
+- ищет треки артиста через iTunes Search API;
+- пробует получить текст по каждой песне через lyrics.ovh API;
+- сохраняет найденные тексты в `.txt`.
 
-## 5) CLI (если нужно без GUI)
-
-```bash
-python src/prepare_dataset.py \
-  --input_dir data/raw \
-  --output_parsed data/processed/parsed.jsonl \
-  --output_train data/processed/train.jsonl \
-  --output_valid data/processed/valid.jsonl
-```
+CLI пример:
 
 ```bash
-python src/train_lora.py \
-  --base_model Qwen/Qwen2.5-1.5B-Instruct \
-  --train_file data/processed/train.jsonl \
-  --valid_file data/processed/valid.jsonl \
-  --output_dir outputs/qwen-lyrics-lora \
-  --use_4bit
+python src/fetch_lyrics.py \
+  --artists "Miyagi, Скриптонит" \
+  --output_dir data/raw \
+  --max_songs 20
 ```
 
-```bash
-python src/generate_lyrics.py \
-  --base_model Qwen/Qwen2.5-1.5B-Instruct \
-  --adapter_dir outputs/qwen-lyrics-lora \
-  --train_file data/processed/train.jsonl \
-  --topic "ночной город" \
-  --mood "меланхолично" \
-  --rhyme "ABAB"
-```
+## 5) Багчекинг и стабильность
+
+Что уже учтено:
+- проверка пустого списка артистов;
+- обработка сетевых ошибок при загрузке;
+- фильтрация слишком коротких текстов;
+- безопасные имена файлов;
+- fallback-поведение парсера (если заголовков нет).

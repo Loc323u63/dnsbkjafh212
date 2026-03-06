@@ -17,6 +17,31 @@ def _resolve_path(path_value: str) -> Path:
     return path if path.is_absolute() else ROOT_DIR / path
 
 
+
+
+def run_fetch(artists: str, output_dir: str, max_songs: int, sleep_s: float):
+    if not artists.strip():
+        return "❌ Укажи хотя бы одного исполнителя (через запятую)."
+
+    out_path = _resolve_path(output_dir)
+    cmd = [
+        sys.executable,
+        str(ROOT_DIR / "src" / "fetch_lyrics.py"),
+        "--artists", artists,
+        "--output_dir", str(out_path),
+        "--max_songs", str(int(max_songs)),
+        "--sleep_s", str(float(sleep_s)),
+    ]
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, cwd=str(ROOT_DIR))
+    except Exception as exc:
+        return f"❌ Ошибка запуска загрузчика: {exc}"
+
+    if proc.returncode != 0:
+        return f"❌ Загрузка завершилась с ошибкой\n\nSTDOUT:\n{proc.stdout}\n\nSTDERR:\n{proc.stderr}"
+
+    return f"✅ Тексты загружены в {out_path}\n\n{proc.stdout[-4000:]}"
 def run_prepare(input_dir: str, output_train: str, output_valid: str, output_parsed: str, valid_ratio: float, seed: int):
     import random
 
@@ -152,6 +177,15 @@ def build_app():
             "# 🎵 Lyrics AI Studio\n"
             "Пошаговый GUI для подготовки датасета, обучения LoRA и генерации текста песен."
         )
+
+        with gr.Tab("0) Скачать тексты из интернета"):
+            artists = gr.Textbox(value="Miyagi, Скриптонит", label="Исполнители через запятую")
+            fetch_output_dir = gr.Textbox(value="data/raw", label="Куда сохранить txt")
+            max_songs = gr.Slider(5, 50, value=20, step=1, label="Песен на исполнителя")
+            sleep_s = gr.Slider(0.0, 2.0, value=0.25, step=0.05, label="Пауза между запросами")
+            fetch_btn = gr.Button("Скачать тексты")
+            fetch_out = gr.Textbox(label="Лог загрузки", lines=10)
+            fetch_btn.click(run_fetch, [artists, fetch_output_dir, max_songs, sleep_s], fetch_out)
 
         with gr.Tab("1) Подготовка датасета"):
             input_dir = gr.Textbox(value="data/raw", label="Папка с песнями (data/raw/<artist>/*.txt)")
