@@ -17,7 +17,7 @@ def _resolve_path(path_value: str) -> Path:
     return path if path.is_absolute() else ROOT_DIR / path
 
 
-def run_prepare(input_dir: str, output_train: str, output_valid: str, valid_ratio: float, seed: int):
+def run_prepare(input_dir: str, output_train: str, output_valid: str, output_parsed: str, valid_ratio: float, seed: int):
     import random
 
     in_dir = _resolve_path(input_dir)
@@ -39,11 +39,14 @@ def run_prepare(input_dir: str, output_train: str, output_valid: str, valid_rati
     train_items = examples[:split]
     valid_items = examples[split:]
 
+    parsed_path = _resolve_path(output_parsed)
+    write_jsonl(parsed_path, examples)
     write_jsonl(train_path, train_items)
     write_jsonl(valid_path, valid_items)
 
     return (
-        "✅ Датасет собран\n"
+        "✅ Датасет собран и размечен JSON-тегами\n"
+        f"parsed: {len(examples)} -> {parsed_path}\n"
         f"train: {len(train_items)} -> {train_path}\n"
         f"valid: {len(valid_items)} -> {valid_path}"
     )
@@ -154,11 +157,12 @@ def build_app():
             input_dir = gr.Textbox(value="data/raw", label="Папка с песнями (data/raw/<artist>/*.txt)")
             output_train = gr.Textbox(value="data/processed/train.jsonl", label="Куда сохранить train")
             output_valid = gr.Textbox(value="data/processed/valid.jsonl", label="Куда сохранить valid")
+            output_parsed = gr.Textbox(value="data/processed/parsed.jsonl", label="Куда сохранить parsed с JSON-тегами")
             valid_ratio = gr.Slider(0.01, 0.5, value=0.1, step=0.01, label="Доля valid")
             seed = gr.Number(value=42, precision=0, label="Seed")
             prepare_btn = gr.Button("Собрать датасет")
             prepare_out = gr.Textbox(label="Лог", lines=8)
-            prepare_btn.click(run_prepare, [input_dir, output_train, output_valid, valid_ratio, seed], prepare_out)
+            prepare_btn.click(run_prepare, [input_dir, output_train, output_valid, output_parsed, valid_ratio, seed], prepare_out)
 
         with gr.Tab("2) Обучение LoRA"):
             base_model = gr.Textbox(value="Qwen/Qwen2.5-1.5B-Instruct", label="Base model")
