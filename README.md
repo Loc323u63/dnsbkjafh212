@@ -10,9 +10,35 @@
 
 ## 1) Установка
 
+### Linux / macOS
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
+pip install -U pip
+pip install -r requirements.txt
+```
+
+### Windows PowerShell
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -U pip
+pip install -r requirements.txt
+```
+
+Если в PowerShell появляется ошибка про запрет запуска скриптов, выполни один раз:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+### Windows CMD
+
+```cmd
+python -m venv .venv
+.venv\Scripts\activate.bat
 pip install -U pip
 pip install -r requirements.txt
 ```
