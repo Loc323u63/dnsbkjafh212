@@ -7,8 +7,18 @@ from urllib.parse import quote
 import requests
 
 ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
+YOUTUBE_SEARCH_URL = "https://www.youtube.com/results"
+SOUNDCLOUD_SEARCH_URL = "https://soundcloud.com/search/sounds"
+VK_SEARCH_URL = "https://m.vk.com/search"
 LYRICS_OVH_URL = "https://api.lyrics.ovh/v1/{artist}/{title}"
 LRCLIB_SEARCH_URL = "https://lrclib.net/api/search"
+
+REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+}
 
 
 def sanitize_filename(name: str) -> str:
@@ -17,35 +27,126 @@ def sanitize_filename(name: str) -> str:
     return cleaned[:120] if cleaned else "untitled"
 
 
-def fetch_song_titles(artist: str, limit: int = 20, timeout: int = 20):
-    params = {
-        "term": artist,
-        "entity": "song",
-        "limit": max(1, min(200, limit * 3)),
-    }
-    resp = requests.get(ITUNES_SEARCH_URL, params=params, timeout=timeout)
+def normalize_title(title: str) -> str:
+    title = re.sub(r"\s*\(.*?(official|lyrics?|audio|video).*?\)\s*", " ", title, flags=re.IGNORECASE)
+    title = re.sub(r"\s*\[.*?(official|lyrics?|audio|video).*?\]\s*", " ", title, flags=re.IGNORECASE)
+    title = re.sub(r"\s+-\s+.*?(official|lyrics?|audio|video).*", "", title, flags=re.IGNORECASE)
+    title = re.sub(r"\s+", " ", title).strip(" -")
+    return title
+
+
+def fetch_song_titles_itunes(artist: str, limit: int = 20, timeout: int = 20):
+    params = {"term": artist, "entity": "song", "limit": max(1, min(200, limit * 3))}
+    resp = requests.get(ITUNES_SEARCH_URL, params=params, timeout=timeout, headers=REQUEST_HEADERS)
     resp.raise_for_status()
     data = resp.json()
 
-    seen = set()
     titles = []
     for item in data.get("results", []):
         title = (item.get("trackName") or "").strip()
         artist_name = (item.get("artistName") or "").strip()
-        if not title or not artist_name:
+        if title and artist_name and artist.lower() in artist_name.lower():
+            titles.append(title)
+    return titles
+
+
+def fetch_song_titles_youtube(artist: str, limit: int = 20, timeout: int = 20):
+    query = f"{artist} official audio"
+    resp = requests.get(
+        YOUTUBE_SEARCH_URL,
+        params={"search_query": query},
+        timeout=timeout,
+        headers=REQUEST_HEADERS,
+    )
+    resp.raise_for_status()
+    html = resp.text
+
+    # Extract titles from JSON snippets in HTML
+    matches = re.findall(r'"title":\{"runs":\[\{"text":"([^"]{2,120})"\}\]\}', html)
+    titles = []
+    for raw in matches:
+        candidate = normalize_title(raw)
+        if not candidate:
             continue
-        if artist.lower() not in artist_name.lower():
+        if artist.lower() not in candidate.lower() and len(candidate.split()) < 2:
             continue
-        key = title.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        titles.append(title)
-        if len(titles) >= limit:
+        titles.append(candidate)
+        if len(titles) >= limit * 3:
             break
     return titles
 
 
+def fetch_song_titles_soundcloud(artist: str, limit: int = 20, timeout: int = 20):
+    resp = requests.get(
+        SOUNDCLOUD_SEARCH_URL,
+        params={"q": artist},
+        timeout=timeout,
+        headers=REQUEST_HEADERS,
+    )
+    resp.raise_for_status()
+    html = resp.text
+
+    # SoundCloud page contains links like /artist/track-title
+    matches = re.findall(r'href="/[^"/]+/([^"?#]+)"', html)
+    titles = []
+    for slug in matches:
+        candidate = normalize_title(slug.replace("-", " "))
+        if candidate and len(candidate) >= 3:
+            titles.append(candidate)
+        if len(titles) >= limit * 3:
+            break
+    return titles
+
+
+def fetch_song_titles_vk(artist: str, limit: int = 20, timeout: int = 20):
+    resp = requests.get(
+        VK_SEARCH_URL,
+        params={"c[q]": f"{artist}", "c[section]": "audio"},
+        timeout=timeout,
+        headers=REQUEST_HEADERS,
+    )
+    # VK may block/require login; return empty instead of failing whole run
+    if resp.status_code >= 400:
+        return []
+    html = resp.text
+    matches = re.findall(r'class="audio_item__title[^>]*>\s*([^<]{2,140})\s*<', html)
+    return [normalize_title(m) for m in matches if normalize_title(m)]
+
+
+def dedupe_titles(titles, artist: str, limit: int):
+    seen = set()
+    out = []
+    for title in titles:
+        key = title.lower().strip()
+        if not key or key in seen:
+            continue
+        if key == artist.lower().strip():
+            continue
+        seen.add(key)
+        out.append(title)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def fetch_song_titles(artist: str, limit: int = 20, timeout: int = 20, sources=None):
+    sources = sources or ["itunes", "youtube", "soundcloud", "vk"]
+    all_titles = []
+
+    for source in sources:
+        try:
+            if source == "itunes":
+                all_titles.extend(fetch_song_titles_itunes(artist, limit=limit, timeout=timeout))
+            elif source == "youtube":
+                all_titles.extend(fetch_song_titles_youtube(artist, limit=limit, timeout=timeout))
+            elif source == "soundcloud":
+                all_titles.extend(fetch_song_titles_soundcloud(artist, limit=limit, timeout=timeout))
+            elif source == "vk":
+                all_titles.extend(fetch_song_titles_vk(artist, limit=limit, timeout=timeout))
+        except requests.RequestException:
+            continue
+
+    return dedupe_titles(all_titles, artist=artist, limit=limit)
 
 
 def fetch_lyrics_text_lrclib(artist: str, title: str, timeout: int = 20):
@@ -53,6 +154,7 @@ def fetch_lyrics_text_lrclib(artist: str, title: str, timeout: int = 20):
         LRCLIB_SEARCH_URL,
         params={"artist_name": artist, "track_name": title},
         timeout=timeout,
+        headers=REQUEST_HEADERS,
     )
     if resp.status_code == 404:
         return None
@@ -65,10 +167,12 @@ def fetch_lyrics_text_lrclib(artist: str, title: str, timeout: int = 20):
         if len(cand) >= 60:
             return cand
     return None
+
+
 def fetch_lyrics_text(artist: str, title: str, timeout: int = 20):
     url = LYRICS_OVH_URL.format(artist=quote(artist), title=quote(title))
     try:
-        resp = requests.get(url, timeout=timeout)
+        resp = requests.get(url, timeout=timeout, headers=REQUEST_HEADERS)
         if resp.status_code != 404:
             resp.raise_for_status()
             data = resp.json()
@@ -92,25 +196,21 @@ def save_lyrics(base_dir: Path, artist: str, title: str, lyrics: str):
     return path
 
 
-def download_artist(artist: str, output_dir: Path, max_songs: int, sleep_s: float, dry_run: bool = False):
-    titles = fetch_song_titles(artist=artist, limit=max_songs)
+def download_artist(artist: str, output_dir: Path, max_songs: int, sleep_s: float, dry_run: bool = False, sources=None):
+    titles = fetch_song_titles(artist=artist, limit=max_songs, sources=sources)
     downloaded = []
     skipped = 0
 
     for title in titles:
-        try:
-            lyrics = fetch_lyrics_text(artist, title)
-            if not lyrics:
-                skipped += 1
-                continue
-            if dry_run:
-                downloaded.append(Path(f"{artist}/{title}.txt"))
-            else:
-                downloaded.append(save_lyrics(output_dir, artist, title, lyrics))
-            time.sleep(max(0.0, sleep_s))
-        except requests.RequestException:
+        lyrics = fetch_lyrics_text(artist, title)
+        if not lyrics:
             skipped += 1
             continue
+        if dry_run:
+            downloaded.append(Path(f"{artist}/{title}.txt"))
+        else:
+            downloaded.append(save_lyrics(output_dir, artist, title, lyrics))
+        time.sleep(max(0.0, sleep_s))
 
     return downloaded, skipped, len(titles)
 
@@ -119,9 +219,17 @@ def parse_artists(raw: str):
     return [a.strip() for a in raw.split(",") if a.strip()]
 
 
+def parse_sources(raw: str):
+    allowed = {"itunes", "youtube", "soundcloud", "vk"}
+    sources = [s.strip().lower() for s in raw.split(",") if s.strip()]
+    sources = [s for s in sources if s in allowed]
+    return sources or ["itunes"]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--artists", type=str, required=True, help="Исполнители через запятую")
+    parser.add_argument("--sources", type=str, default="itunes,youtube,soundcloud,vk", help="Источники: itunes,youtube,soundcloud,vk")
     parser.add_argument("--output_dir", type=Path, default=Path("data/raw"))
     parser.add_argument("--max_songs", type=int, default=20)
     parser.add_argument("--sleep_s", type=float, default=0.25)
@@ -131,6 +239,7 @@ def main():
     artists = parse_artists(args.artists)
     if not artists:
         raise ValueError("Нужен хотя бы 1 исполнитель")
+    sources = parse_sources(args.sources)
 
     total_files = 0
     for artist in artists:
@@ -140,9 +249,11 @@ def main():
             max_songs=args.max_songs,
             sleep_s=args.sleep_s,
             dry_run=args.dry_run,
+            sources=sources,
         )
         total_files += len(files)
         print(f"Artist: {artist}")
+        print(f"  sources: {', '.join(sources)}")
         print(f"  discovered titles: {discovered}")
         print(f"  downloaded: {len(files)}")
         print(f"  skipped/not found: {skipped}")

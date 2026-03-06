@@ -19,7 +19,7 @@ def _resolve_path(path_value: str) -> Path:
 
 
 
-def run_fetch(artists: str, output_dir: str, max_songs: int, sleep_s: float):
+def run_fetch(artists: str, sources: str, output_dir: str, max_songs: int, sleep_s: float):
     if not artists.strip():
         return "❌ Укажи хотя бы одного исполнителя (через запятую)."
 
@@ -28,6 +28,7 @@ def run_fetch(artists: str, output_dir: str, max_songs: int, sleep_s: float):
         sys.executable,
         str(ROOT_DIR / "src" / "fetch_lyrics.py"),
         "--artists", artists,
+        "--sources", sources,
         "--output_dir", str(out_path),
         "--max_songs", str(int(max_songs)),
         "--sleep_s", str(float(sleep_s)),
@@ -180,12 +181,13 @@ def build_app():
 
         with gr.Tab("0) Скачать тексты из интернета"):
             artists = gr.Textbox(value="Miyagi, Скриптонит", label="Исполнители через запятую")
+            sources = gr.Textbox(value="itunes,youtube,soundcloud,vk", label="Источники поиска (через запятую)")
             fetch_output_dir = gr.Textbox(value="data/raw", label="Куда сохранить txt")
             max_songs = gr.Slider(5, 50, value=20, step=1, label="Песен на исполнителя")
             sleep_s = gr.Slider(0.0, 2.0, value=0.25, step=0.05, label="Пауза между запросами")
             fetch_btn = gr.Button("Скачать тексты")
             fetch_out = gr.Textbox(label="Лог загрузки", lines=10)
-            fetch_btn.click(run_fetch, [artists, fetch_output_dir, max_songs, sleep_s], fetch_out)
+            fetch_btn.click(run_fetch, [artists, sources, fetch_output_dir, max_songs, sleep_s], fetch_out)
 
         with gr.Tab("1) Подготовка датасета"):
             input_dir = gr.Textbox(value="data/raw", label="Папка с песнями (data/raw/<artist>/*.txt)")
